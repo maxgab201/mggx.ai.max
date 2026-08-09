@@ -1,96 +1,94 @@
 # mc-preview
 
-Una CLI *standalone* para generar previews 3D locales, versionadas y comparables de texturas de bloques de Minecraft.
+A standalone CLI for generating local, versioned, and comparable 3D previews of Minecraft block textures.
 
-Esta herramienta está pensada para ser infraestructura: simple, predecible y automatizable, siendo el compañero perfecto para pipelines de Resource Packs (y de IA como Claude Code) donde se requiere revisión visual rápida sin orquestación pesada.
+This tool acts as a deterministic infrastructure pipeline—ideal for Claude Code and automated visual QA testing. It is strictly for visual inspection and does **not** handle asset generation, PBR generation, or heavy rendering.
 
-## Características
+## Features
 
-- **Sin dependencias nativas pesadas**: Renderizado isométrico por software utilizando `Pillow`. No requiere Three.js, OpenGL, ni Blender.
-- **Determinista**: Genera exactamente 2 vistas clave (`upper`, `lower`) con misma iluminación y FOV, asegurando que las versiones sean 100% comparables.
-- **Mapeo explícito de caras**: Requiere proveer explícitamente texturas separadas para `--top`, `--bottom` y `--sides` a fin de evitar mapeos repetitivos.
-- **Versionado automático**: Cada vez que se renderiza, se crea una nueva versión en una carpeta `vXXXX` sin sobreescribir la historia, junto con una carpeta `current/` que contiene una copia de la última versión activa.
-- **Comparación visual**: Genera un collage side-by-side entre dos versiones para facilitar la evaluación de QA.
-- **Auditable**: Genera metadatos JSON completos (dimensiones, hashes, motor, timestamp) junto con la textura original en cada versión.
+- **No Heavy Native Dependencies**: Uses lightweight isometric software rendering via Python's `Pillow`. No WebGL, Blender, OptiFine, or GPU required.
+- **Deterministic Two-View Logic**: Generates strictly 2 perspectives (`upper` and `lower`) keeping QA simple and fully comparable.
+- **Strict Face Mapping**: Enforces assigning independent textures to `--top`, `--bottom`, and `--sides` to prevent duplicate mappings across faces.
+- **PBR & POM Visualization**: Given existing `_s` and `_n` maps associated with the textures, `--pbr` visually simulates specular shading and normal mapped highlights, while `--pom` simulates a parallax void for height displacement approximation.
+- **Collective Mode**: A `--collective` flag generates a deterministic 3x3 array layout of the block specifically designed for checking tiling, repetition seams, and rhythmic correctness.
+- **Automated Versioning**: Successive renders do not override history. A `vXXXX` directory handles incremental changes alongside a convenient physical `current/` alias folder mapping to the latest approved preview.
+- **JSON Stdout Compatibility**: Support for a `--json` parameter to easily pass structured parsing context into pipelines or LLM wrappers.
 
-## Instalación
+## Installation
 
-Requiere **Python 3** y `Pillow`.
+This requires **Python 3.9+** and `Pillow`. This functions gracefully inside typical Windows/macOS/Linux systems including WSL and PowerShell.
 
-1. Clona el repositorio
-2. Ejecuta:
-```bash
-pip install -e .
+```powershell
+git clone <repository>
+cd mc-preview
+python -m pip install .
 ```
 
-## Configuración
+## Setup Config
 
-Ejecuta el comando `init` para crear un archivo `preview.config.json` con valores por defecto.
-
-```bash
-preview init
+Launch workspace layout and initialization settings with defaults.
+```powershell
+python -m preview.cli init
 ```
 
-Por defecto, esto configurará un `workspace/` relativo al archivo de configuración.
+*(This constructs a `preview.config.json` that roots workspace outputs relative to the json configuration file, guaranteeing portability).*
 
-## Uso
+## Examples & Usage
 
-### Renderizar texturas
-Genera una nueva versión a partir de las texturas provistas:
-```bash
-preview render --block stone --top ./ruta/top.png --bottom ./ruta/bottom.png --sides ./ruta/sides.png
-```
-*Salida: Crea la versión `v0001` (o la siguiente disponible) con 2 renders (upper/lower), copia las 3 texturas de entrada, y actualiza `current/`.*
-
-### Estado
-Muestra un resumen rápido de las versiones y la versión actual:
-```bash
-preview status --block stone
+### 1. Single Block Preview
+Generates an upper and lower view of a basic block material.
+```powershell
+python -m preview.cli render --block grass_block --top "textures\grass_top.png" --bottom "textures\dirt.png" --sides "textures\grass_side.png"
 ```
 
-### Comparar versiones
-Genera una imagen side-by-side comparando dos versiones existentes.
-```bash
-preview compare --block stone --from v0001 --to v0002
+### 2. PBR Visualization
+If your material possesses roughness/specular (`_s`) or normal (`_n`) maps next to your inputs, this simulates physical based highlights.
+```powershell
+python -m preview.cli render --block stone --top "stone_top.png" --bottom "stone_bottom.png" --sides "stone_side.png" --pbr
 ```
 
-### Limpiar
-Limpia archivos temporales y comparaciones, **sin** borrar tu historial de versiones ni `current/`.
-```bash
-preview clean --block stone
+### 3. POM Visualization
+Combines depth voiding approximations to test POM extrusions and seams.
+```powershell
+python -m preview.cli render --block stone --top "stone_top.png" --bottom "stone_bottom.png" --sides "stone_side.png" --pbr --pom
 ```
 
-### Abrir
-Abre el directorio del workspace del bloque en el explorador de archivos de tu sistema operativo.
-```bash
-preview open --block stone
+### 4. Collective Array Rendering
+Checks tiling by populating a 3x3 repeating structural grid format.
+```powershell
+python -m preview.cli render --collective --block stone --top "stone_top.png" --bottom "stone_bottom.png" --sides "stone_side.png"
 ```
 
-## Estructura de Directorios
+## Management Commands
 
-```text
-workspace/
-  stone/
-    current/
-      top.png
-      bottom.png
-      sides.png
-      metadata.json
-      preview/
-        upper.png
-        lower.png
-    v0001/
-      ...
-    v0002/
-      ...
-    comparisons/
-      v0001_vs_v0002.png
+### Status
+Get tracking states of history. Use `--json` for machine readability.
+```powershell
+python -m preview.cli status --block stone
 ```
 
-## Arquitectura
+### Compare
+Puts two historical iterations side-by-side on an image grid for easy visual review.
+```powershell
+python -m preview.cli compare --block stone --from v0001 --to v0002
+```
 
-- `preview/cli.py`: Frontend de CLI con argparse.
-- `preview/config.py`: Gestión del archivo de configuración json y resolución de rutas relativas.
-- `preview/workspace.py`: Lógica del sistema de archivos, manejo de la versión actual y metadatos con soporte multiface.
-- `preview/render.py`: Motor isométrico propio que aplica textura a 3 caras visibles (distinguiendo entre top/bottom/sides) de un cubo sin aceleración de hardware.
-- `preview/compare.py`: Lógica para generar collages de imágenes de las 2 vistas de evaluación.
+### Open
+Opens your native file explorer exactly to the workspace location containing your `current` and versioned iterations.
+```powershell
+python -m preview.cli open --block stone
+```
+
+### Clean
+Purges temporary collages or loose cached artifacts without touching version iterations.
+```powershell
+python -m preview.cli clean --block stone
+```
+
+## Architecture Map
+
+- `preview/cli.py`: Core CLI router.
+- `preview/workspace.py`: Versioning/IO engine logic mapping inputs and copying resources.
+- `preview/render.py`: Math-based isometric projection scaling textures to specific cube faces with PBR logic.
+- `preview/collective.py`: Sub-renderer specifically for overlapping Z-space mapping across a 3x3 block array logic.
+- `preview/compare.py`: Pillow collage construction logic.
