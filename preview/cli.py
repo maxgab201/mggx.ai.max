@@ -15,6 +15,7 @@ from .workspace import (
 from .render import render_isometric_block
 from .compare import generate_comparison
 from .collective import render_collective_isometric_block
+from .manifest import parse_manifest
 
 def get_workspace_root(config: dict) -> Path:
     return Path(config["resolved_workspace"])
@@ -91,14 +92,46 @@ Examples:
     workspace_root = get_workspace_root(config)
 
     if args.command == "render":
+        multi_blocks = []
+        is_manifest_mode = False
+        primary_block_name = ""
+
         if args.manifest:
+            is_manifest_mode = True
             manifest_path = Path(args.manifest)
             if not manifest_path.exists():
                 _print_output({"status": "error", "error": f"Manifest file not found: {args.manifest}"}, args.json)
                 sys.exit(1)
-            # Manifest parsing logic to follow
-            _print_output({"status": "error", "error": "Manifest rendering not yet implemented in main loop"}, args.json)
-            sys.exit(1)
+
+            success, parsed_blocks, err_msg = parse_manifest(manifest_path)
+            if not success:
+                _print_output({"status": "error", "error": err_msg}, args.json)
+                sys.exit(1)
+
+            if len(parsed_blocks) == 0:
+                _print_output({"status": "error", "error": "Manifest contains no blocks."}, args.json)
+                sys.exit(1)
+
+            multi_blocks = parsed_blocks
+
+            # The primary block name determines where the workspace output goes.
+            # We use the name of the manifest itself or the first block if a block flag isn't provided.
+            primary_block_name = args.block if args.block else "collective_manifest"
+
+            # Validate all paths
+            missing = []
+            for b in multi_blocks:
+                for face in ["top", "bottom", "sides"]:
+                    if not b[face].exists():
+                        missing.append(f"{b['block']} {face}: {b[face]}")
+                if "normal" in b and not b["normal"].exists():
+                    missing.append(f"{b['block']} normal: {b['normal']}")
+                if "specular" in b and not b["specular"].exists():
+                    missing.append(f"{b['block']} specular: {b['specular']}")
+
+            if missing:
+                _print_output({"status": "error", "error": f"Missing files in manifest: {', '.join(missing)}"}, args.json)
+                sys.exit(1)
         else:
             if not args.block or not args.top or not args.bottom or not args.sides:
                 _print_output({"status": "error", "error": "--block, --top, --bottom, and --sides are required unless using --manifest"}, args.json)
@@ -119,78 +152,95 @@ Examples:
                 _print_output({"status": "error", "error": f"Missing inputs: {', '.join(missing)}"}, args.json)
                 sys.exit(1)
 
-            if not args.json:
-                print(f"Rendering new version for block '{args.block}'...")
-
-            version_dir = create_new_version(workspace_root, args.block, textures, config, pbr=args.pbr, pom=args.pom, collective=args.collective)
-
-            if version_dir is None:
-                 _print_output({"status": "error", "error": "Failed to create version due to missing maps for PBR/POM"}, args.json)
-                 sys.exit(1)
-
-            preview_dir = version_dir / "preview"
-            views = ["upper", "lower"]
-
-            output_paths = {}
-            for view in views:
-                # Add suffix logic based on PBR/POM
-                suffix = ""
-                if args.pbr and args.pom:
-                    suffix = "_pbr_pom"
-                elif args.pbr:
-                    suffix = "_pbr"
-                elif args.pom:
-                    suffix = "_pom"
-
-                # If collective, put in a 'collective' folder as per spec
-                if args.collective:
-                    coll_dir = version_dir / "collective"
-                    coll_dir.mkdir(exist_ok=True)
-                    out_path = coll_dir / f"{view}{suffix}.png"
-                    render_collective_isometric_block(
-                        textures_dir=version_dir,
-                        output_path=str(out_path),
-                        view_type=view,
-                        resolution=config.get("render_resolution", 1024),
-                        bg_color=config.get("background", "#101010"),
-                        pbr=args.pbr,
-                        pom=args.pom
-                    )
-                else:
-                    out_path = preview_dir / f"{view}{suffix}.png"
-                    render_isometric_block(
-                        textures_dir=version_dir,
-                        output_path=str(out_path),
-                        view_type=view,
-                        resolution=config.get("render_resolution", 1024),
-                        bg_color=config.get("background", "#101010"),
-                        pbr=args.pbr,
-                        pom=args.pom
-                    )
-                output_paths[view] = str(out_path)
-                if not args.json:
-                    print(f"  Rendered {view}")
-
-            meta_path = version_dir / "metadata.json"
-            with open(meta_path, "r") as f:
-                meta = json.load(f)
-            meta["render_status"] = "success"
-            with open(meta_path, "w") as f:
-                json.dump(meta, f, indent=2)
-
-            update_current_dir(workspace_root, args.block, version_dir)
-
-            _print_output({
-                "status": "success",
-                "message": f"Successfully created version {version_dir.name} and updated current/",
+            multi_blocks = [{
                 "block": args.block,
-                "version": version_dir.name,
-                "workspace": str(workspace_root),
-                "preview": output_paths,
-                "pbr": args.pbr,
-                "pom": args.pom,
-                "collective": args.collective
-            }, args.json)
+                "top": textures["top"],
+                "bottom": textures["bottom"],
+                "sides": textures["sides"]
+            }]
+            primary_block_name = args.block
+
+        if not args.json:
+            print(f"Rendering new version for block '{primary_block_name}'...")
+
+        version_dir = create_new_version(
+            workspace_root,
+            primary_block_name,
+            multi_blocks,
+            config,
+            pbr=args.pbr,
+            pom=args.pom,
+            collective=args.collective,
+            is_manifest=is_manifest_mode
+        )
+
+        if version_dir is None:
+             _print_output({"status": "error", "error": "Failed to create version due to missing maps for PBR/POM"}, args.json)
+             sys.exit(1)
+
+        preview_dir = version_dir / "preview"
+        views = ["upper", "lower"]
+
+        output_paths = {}
+        for view in views:
+            suffix = ""
+            if args.pbr and args.pom:
+                suffix = "_pbr_pom"
+            elif args.pbr:
+                suffix = "_pbr"
+            elif args.pom:
+                suffix = "_pom"
+
+            if args.collective:
+                coll_dir = version_dir / "collective"
+                coll_dir.mkdir(exist_ok=True)
+                out_path = coll_dir / f"{view}{suffix}.png"
+                render_collective_isometric_block(
+                    textures_dir=version_dir,
+                    output_path=str(out_path),
+                    view_type=view,
+                    resolution=config.get("render_resolution", 1024),
+                    bg_color=config.get("background", "#101010"),
+                    pbr=args.pbr,
+                    pom=args.pom,
+                    multi_blocks=multi_blocks
+                )
+            else:
+                out_path = preview_dir / f"{view}{suffix}.png"
+                render_isometric_block(
+                    textures_dir=version_dir,
+                    output_path=str(out_path),
+                    view_type=view,
+                    resolution=config.get("render_resolution", 1024),
+                    bg_color=config.get("background", "#101010"),
+                    pbr=args.pbr,
+                    pom=args.pom,
+                    multi_blocks=multi_blocks
+                )
+            output_paths[view] = str(out_path)
+            if not args.json:
+                print(f"  Rendered {view}")
+
+        meta_path = version_dir / "metadata.json"
+        with open(meta_path, "r") as f:
+            meta = json.load(f)
+        meta["render_status"] = "success"
+        with open(meta_path, "w") as f:
+            json.dump(meta, f, indent=2)
+
+        update_current_dir(workspace_root, primary_block_name, version_dir)
+
+        _print_output({
+            "status": "success",
+            "message": f"Successfully created version {version_dir.name} and updated current/",
+            "block": primary_block_name,
+            "version": version_dir.name,
+            "workspace": str(workspace_root),
+            "preview": output_paths,
+            "pbr": args.pbr,
+            "pom": args.pom,
+            "collective": args.collective
+        }, args.json)
 
     elif args.command == "compare":
         if not args.json:

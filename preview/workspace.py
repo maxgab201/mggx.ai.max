@@ -4,7 +4,7 @@ import shutil
 import hashlib
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional
+from typing import List, Dict, Optional
 
 def get_block_dir(workspace_root: Path, block_name: str) -> Path:
     return workspace_root / block_name
@@ -41,91 +41,112 @@ def calculate_hash(file_path: Path) -> str:
             hasher.update(chunk)
     return hasher.hexdigest()
 
-def find_auxiliary_maps(base_path: Path, pbr: bool, pom: bool) -> dict:
+def find_auxiliary_maps(base_path: Path, pbr: bool, pom: bool, explicit_normal=None, explicit_specular=None) -> dict:
     """Finds associated PBR (_s for specular/roughness) and POM (_n for normal/height) maps."""
     found = {}
     base_name = base_path.stem
     parent = base_path.parent
 
     if pbr:
-        s_map = parent / f"{base_name}_s.png"
-        if s_map.exists():
-            found["s"] = s_map
+        if explicit_specular and explicit_specular.exists():
+             found["s"] = explicit_specular
         else:
-            return None # Missing required PBR map
+             s_map = parent / f"{base_name}_s.png"
+             if s_map.exists():
+                 found["s"] = s_map
+             else:
+                 return None
 
     if pom or pbr:
-        # Usually Normal maps (_n) are used for both PBR lighting and POM displacement
-        n_map = parent / f"{base_name}_n.png"
-        if n_map.exists():
-            found["n"] = n_map
-        elif pom:
-            return None # Missing required POM/Height/Normal map
+        if explicit_normal and explicit_normal.exists():
+             found["n"] = explicit_normal
+        else:
+             n_map = parent / f"{base_name}_n.png"
+             if n_map.exists():
+                 found["n"] = n_map
+             elif pom:
+                 return None
 
     return found
 
-def create_new_version(workspace_root: Path, block_name: str, textures: Dict[str, Path], config: dict, pbr: bool = False, pom: bool = False, collective: bool = False) -> Optional[Path]:
-    block_dir = get_block_dir(workspace_root, block_name)
+def create_new_version(workspace_root: Path, primary_block_name: str, multi_blocks: List[Dict[str, Path]], config: dict, pbr: bool = False, pom: bool = False, collective: bool = False, is_manifest: bool = False) -> Optional[Path]:
+    block_dir = get_block_dir(workspace_root, primary_block_name)
     block_dir.mkdir(parents=True, exist_ok=True)
 
-    version_name = get_next_version_name(workspace_root, block_name)
+    version_name = get_next_version_name(workspace_root, primary_block_name)
     version_dir = block_dir / version_name
 
-    # We validate auxiliary maps BEFORE creating the directory
-    aux_maps = {}
-    for name, source_path in textures.items():
-        if pbr or pom:
-            aux = find_auxiliary_maps(source_path, pbr, pom)
-            if aux is None:
-                # Missing required maps for requested features
-                return None
-            aux_maps[name] = aux
-        else:
-            aux_maps[name] = {}
+    # Validation step
+    aux_maps_per_block = []
+    for b in multi_blocks:
+        aux_maps = {}
+        for face in ["top", "bottom", "sides"]:
+            if pbr or pom:
+                exp_n = b.get("normal")
+                exp_s = b.get("specular")
+                aux = find_auxiliary_maps(b[face], pbr, pom, explicit_normal=exp_n, explicit_specular=exp_s)
+                if aux is None:
+                    return None
+                aux_maps[face] = aux
+            else:
+                aux_maps[face] = {}
+        aux_maps_per_block.append(aux_maps)
 
     version_dir.mkdir(exist_ok=True)
     preview_dir = version_dir / "preview"
     preview_dir.mkdir(exist_ok=True)
 
-    input_hashes = {}
-    texture_dimensions = {}
-    inputs_meta = {}
+    inputs_meta = []
 
     from PIL import Image
 
-    for name, source_path in textures.items():
-        dest_path = version_dir / f"{name}.png"
-        shutil.copy2(source_path, dest_path)
-        input_hashes[name] = calculate_hash(dest_path)
-        inputs_meta[name] = str(source_path)
+    for idx, b in enumerate(multi_blocks):
+        b_name = b["block"]
+        b_meta = {
+            "block": b_name,
+            "paths": {},
+            "hashes": {},
+            "dimensions": {}
+        }
 
-        try:
-            with Image.open(dest_path) as img:
-                texture_dimensions[name] = list(img.size)
-        except Exception:
-            texture_dimensions[name] = [0, 0]
+        # We store copies namespaced by the block name if there are multiple blocks
+        prefix = f"{b_name}_" if len(multi_blocks) > 1 else ""
 
-        # Copy aux maps
-        for aux_type, aux_path in aux_maps[name].items():
-            dest_aux = version_dir / f"{name}_{aux_type}.png"
-            shutil.copy2(aux_path, dest_aux)
-            input_hashes[f"{name}_{aux_type}"] = calculate_hash(dest_aux)
-            inputs_meta[f"{name}_{aux_type}"] = str(aux_path)
+        for face in ["top", "bottom", "sides"]:
+            source_path = b[face]
+            dest_path = version_dir / f"{prefix}{face}.png"
+            shutil.copy2(source_path, dest_path)
+
+            b_meta["paths"][face] = str(source_path)
+            b_meta["hashes"][face] = calculate_hash(dest_path)
+            try:
+                with Image.open(dest_path) as img:
+                    b_meta["dimensions"][face] = list(img.size)
+            except Exception:
+                b_meta["dimensions"][face] = [0, 0]
+
+            # Copy aux maps
+            for aux_type, aux_path in aux_maps_per_block[idx][face].items():
+                dest_aux = version_dir / f"{prefix}{face}_{aux_type}.png"
+                shutil.copy2(aux_path, dest_aux)
+                b_meta["paths"][f"{face}_{aux_type}"] = str(aux_path)
+                b_meta["hashes"][f"{face}_{aux_type}"] = calculate_hash(dest_aux)
+
+        inputs_meta.append(b_meta)
 
     metadata = {
-        "block": block_name,
+        "block": primary_block_name,
         "version": version_name,
         "timestamp": datetime.utcnow().isoformat() + "Z",
         "status": "candidate",
         "render_mode": "collective" if collective else "single",
+        "is_manifest": is_manifest,
         "pbr": pbr,
         "pom": pom,
         "views": ["upper", "lower"],
         "inputs": inputs_meta,
-        "input_hashes": input_hashes,
-        "texture_dimensions": texture_dimensions,
         "render_status": "pending",
-        "renderer": "pillow_isometric_v3",
+        "renderer": "pillow_isometric_v4",
         "has_comparison": False
     }
 
@@ -139,7 +160,6 @@ def update_current_dir(workspace_root: Path, block_name: str, version_dir: Path)
     current_dir = get_current_dir(workspace_root, block_name)
     if current_dir.exists():
         shutil.rmtree(current_dir)
-
     shutil.copytree(version_dir, current_dir)
 
 def clean_workspace(workspace_root: Path, block_name: str):

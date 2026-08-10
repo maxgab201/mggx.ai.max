@@ -1,23 +1,23 @@
 import pytest
-from PIL import Image, ImageDraw
-import os
-from pathlib import Path
+from PIL import Image
 import subprocess
+from pathlib import Path
 
 def test_pbr_pom_failure_missing_maps():
     # Trying to render PBR without maps should fail.
-    Image.new('RGBA', (16,16), 'red').save('test_top.png')
-    Image.new('RGBA', (16,16), 'blue').save('test_bottom.png')
-    Image.new('RGBA', (16,16), 'green').save('test_sides.png')
+    Image.new('RGBA', (16,16), 'red').save('test2_top.png')
+    Image.new('RGBA', (16,16), 'blue').save('test2_bottom.png')
+    Image.new('RGBA', (16,16), 'green').save('test2_sides.png')
 
     result = subprocess.run([
-        "python", "-m", "preview.cli", "render", "--block", "test_missing",
-        "--top", "test_top.png", "--bottom", "test_bottom.png", "--sides", "test_sides.png",
+        "python", "-m", "preview.cli", "render", "--block", "test2_missing",
+        "--top", "test2_top.png", "--bottom", "test2_bottom.png", "--sides", "test2_sides.png",
         "--pbr"
     ], capture_output=True, text=True)
 
+    # We should see the error in the stdout
     assert result.returncode == 1
-    assert "Failed to create version due to missing maps" in result.stdout
+    assert "Failed to create version due to missing maps for PBR/POM" in result.stdout
 
 def test_successful_render():
     Image.new('RGBA', (16,16), 'red').save('test_top.png')
@@ -39,7 +39,6 @@ def test_successful_render():
     ], capture_output=True, text=True)
 
     assert result.returncode == 0
-
     p = Path("workspace/test_success/current/preview/upper_pbr_pom.png")
     assert p.exists()
 
