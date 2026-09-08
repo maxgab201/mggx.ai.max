@@ -1,0 +1,179 @@
+        broadcastStatus("Modo TOUCH: Moonlight recibe el touch directamente. Tocá la pastilla para volver a los controles.");
+    }
+
+    private void enableControls() {
+        if (!Settings.canDrawOverlays(this)) {
+            broadcastStatus("Falta el permiso de overlay.");
+            return;
+        }
+        if (overlayView != null) {
+            controlsEnabled = true;
+            updateModeToggleText();
+            return;
+        }
+
+        overlayView = new MinecraftOverlayView(this, this);
+        WindowManager.LayoutParams params = new WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT,
+                Build.VERSION.SDK_INT >= 26
+                        ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                        : WindowManager.LayoutParams.TYPE_PHONE,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+                        | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                PixelFormat.TRANSLUCENT);
+        params.gravity = Gravity.TOP | Gravity.START;
+        try {
+            windowManager.addView(overlayView, params);
+            controlsEnabled = true;
+            updateModeToggleText();
+            // Re-add the compact toggle so it always stays above the full-screen controls.
+            if (modeToggleView != null) {
+                try {
+                    windowManager.removeView(modeToggleView);
+                    modeToggleView = null;
+                } catch (Exception ignored) {}
+                showModeToggle();
+            }
+            broadcastStatus(connectedDevice != null
+                    ? "Controles activos sobre Moonlight. Tocá 🎮 CONTROLES para pasar a TOUCH."
+                    : "Controles activos, pero todavía no hay un PC conectado por HID.");
+        } catch (Exception e) {
+            overlayView = null;
+            controlsEnabled = false;
+            updateModeToggleText();
+            broadcastStatus("No se pudo mostrar el overlay: " + e.getClass().getSimpleName());
+        }
+    }
+
+    private void updateModeToggleText() {
+        if (modeToggleView == null) return;
+        modeToggleView.setText(controlsEnabled ? "🎮 CONTROLES" : "👆 TOUCH");
+    }
+
+    public void hideOverlay() {
+        releaseAll();
+        controlsEnabled = false;
+        if (overlayView != null) {
+            try { windowManager.removeView(overlayView); } catch (Exception ignored) {}
+            overlayView = null;
+        }
+        if (modeToggleView != null) {
+            try { windowManager.removeView(modeToggleView); } catch (Exception ignored) {}
+            modeToggleView = null;
+        }
+        broadcastStatus("Overlay cerrado. El HID sigue listo en segundo plano.");
+    }
+
+    private int dp(int value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+
+    public synchronized void setMovementKeys(Set<Integer> movementKeys) {
+        heldKeys.remove(HidCodes.KEY_W);
+        heldKeys.remove(HidCodes.KEY_A);
+        heldKeys.remove(HidCodes.KEY_S);
+        heldKeys.remove(HidCodes.KEY_D);
+        heldKeys.addAll(movementKeys);
+        sendKeyboardReport();
+    }
+
+    public synchronized void setKey(int key, boolean down) {
+        if (down) heldKeys.add(key);
+        else heldKeys.remove(key);
+        sendKeyboardReport();
+    }
+
+    public synchronized void setModifier(byte mask, boolean down) {
+        if (down) modifiers |= mask;
+        else modifiers &= (byte) ~mask;
+        sendKeyboardReport();
+    }
+
+    public synchronized void setMouseButton(byte mask, boolean down) {
+        if (down) mouseButtons |= mask;
+        else mouseButtons &= (byte) ~mask;
+        sendMouseReport(0, 0, 0);
+    }
+
+    public synchronized void moveMouse(float dx, float dy) {
+        float sensitivity = getSharedPreferences("controls", MODE_PRIVATE)
+                .getFloat("sensitivity", 1.0f);
+        boolean invertY = getSharedPreferences("controls", MODE_PRIVATE)
+                .getBoolean("invert_y", false);
+        int x = ControlMath.scaledMouseDelta(dx, sensitivity, false);
+        int y = ControlMath.scaledMouseDelta(dy, sensitivity, invertY);
+        while (x != 0 || y != 0) {
+            int sx = ControlMath.clamp(x, -127, 127);
+            int sy = ControlMath.clamp(y, -127, 127);
+            sendMouseReport(sx, sy, 0);
+            x -= sx;
+            y -= sy;
+        }
+    }
+
+    public synchronized void scroll(int amount) {
+        int remaining = amount;
+        while (remaining != 0) {
+            int part = ControlMath.clamp(remaining, -127, 127);
+            sendMouseReport(0, 0, part);
+            remaining -= part;
+        }
+    }
+
+    private void sendKeyboardReport() {
+        if (!canSend()) return;
+        byte[] report = new byte[8];
+        report[0] = modifiers;
+        int i = 2;
+        for (Integer key : heldKeys) {
+            if (i >= 8) break;
+            report[i++] = (byte) (key & 0xFF);
+        }
+        try { hid.sendReport(connectedDevice, KEYBOARD_REPORT_ID, report); }
+        catch (SecurityException ignored) {}
+    }
+
+    private void sendMouseReport(int dx, int dy, int wheel) {
+        if (!canSend()) return;
+        byte[] report = new byte[] {
+                mouseButtons,
+                (byte) dx,
+                (byte) dy,
+                (byte) wheel
+        };
+        try { hid.sendReport(connectedDevice, MOUSE_REPORT_ID, report); }
+        catch (SecurityException ignored) {}
+    }
+
+    public synchronized void releaseAll() {
+        heldKeys.clear();
+        modifiers = 0;
+        mouseButtons = 0;
+        sendKeyboardReport();
+        sendMouseReport(0, 0, 0);
+    }
+
+    private boolean canSend() {
+        return hid != null && connectedDevice != null && hasBluetoothPermission();
+    }
+
+    public static final class HidCodes {
+        private HidCodes() {}
+        public static final int KEY_A = 0x04;
+        public static final int KEY_D = 0x07;
+        public static final int KEY_E = 0x08;
+        public static final int KEY_Q = 0x14;
+        public static final int KEY_S = 0x16;
+        public static final int KEY_W = 0x1A;
+        public static final int KEY_1 = 0x1E;
+        public static final int KEY_2 = 0x1F;
+        public static final int KEY_3 = 0x20;
+        public static final int KEY_4 = 0x21;
+        public static final int KEY_5 = 0x22;
+        public static final int KEY_6 = 0x23;
+        public static final int KEY_7 = 0x24;
+        public static final int KEY_8 = 0x25;
+        public static final int KEY_9 = 0x26;
+        public static final int KEY_ESC = 0x29;
