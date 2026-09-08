@@ -1,0 +1,52 @@
+name: Minecraft Touch HID APK
+
+on:
+  push:
+    branches: [minecraft-touch-hid-v1]
+    paths:
+      - 'minecraft-touch-hid/**'
+      - '.github/workflows/minecraft-touch-hid.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+      - name: Install Android SDK 36
+        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+      - name: Unit tests
+        working-directory: minecraft-touch-hid
+        run: gradle :minecrafttouchhid:testDebugUnitTest --stacktrace
+      - name: Android lint
+        working-directory: minecraft-touch-hid
+        run: gradle :minecrafttouchhid:lintDebug --stacktrace
+      - name: Build APK
+        working-directory: minecraft-touch-hid
+        run: gradle :minecrafttouchhid:assembleDebug --stacktrace
+      - name: Verify and package
+        run: |
+          APK=minecraft-touch-hid/minecrafttouchhid/build/outputs/apk/debug/minecrafttouchhid-debug.apk
+          test -f "$APK"
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner -print -quit)
+          test -x "$APKSIGNER"
+          "$APKSIGNER" verify --verbose --print-certs "$APK"
+          cp "$APK" MGGX-Minecraft-Touch-HID-v1.0.1.apk
+          sha256sum MGGX-Minecraft-Touch-HID-v1.0.1.apk > SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MGGX-Minecraft-Touch-HID-v1.0.1
+          path: |
+            MGGX-Minecraft-Touch-HID-v1.0.1.apk
+            SHA256SUMS.txt
+          if-no-files-found: error
