@@ -1,0 +1,160 @@
+
+        if (x > w * 0.40f && lookPointer < 0) {
+            lookPointer = id;
+            lookLastX = x;
+            lookLastY = y;
+            pointerZones.put(id, "look");
+        }
+    }
+
+    private void handleMove(int id, float x, float y) {
+        String zone = pointerZones.get(id);
+        if (zone == null) return;
+        if ("joystick".equals(zone)) {
+            updateJoystick(x, y);
+        } else if ("look".equals(zone) && id == lookPointer) {
+            float dx = x - lookLastX;
+            float dy = y - lookLastY;
+            lookLastX = x;
+            lookLastY = y;
+            if (Math.abs(dx) >= 0.25f || Math.abs(dy) >= 0.25f) controller.moveMouse(dx, dy);
+        }
+    }
+
+    private void handleUp(int id) {
+        String zone = pointerZones.remove(id);
+        if (zone == null) return;
+        if ("joystick".equals(zone)) {
+            joystickPointer = -1;
+            lastMovement = new HashSet<>();
+            controller.setMovementKeys(lastMovement);
+        } else if ("look".equals(zone)) {
+            if (lookPointer == id) lookPointer = -1;
+        } else if (!"hide".equals(zone)) {
+            releaseZone(zone);
+        }
+    }
+
+    private void cancelAllPointers() {
+        for (String zone : pointerZones.values()) {
+            if (!"joystick".equals(zone) && !"look".equals(zone) && !"hide".equals(zone)) {
+                releaseZone(zone);
+            }
+        }
+        pointerZones.clear();
+        joystickPointer = -1;
+        lookPointer = -1;
+        lastMovement = new HashSet<>();
+        controller.releaseAll();
+    }
+
+    private void updateJoystick(float x, float y) {
+        float s = Math.min(getWidth(), getHeight());
+        float cx = getWidth() * 0.14f;
+        float cy = getHeight() * 0.72f;
+        float r = s * 0.13f;
+        float dx = x - cx;
+        float dy = y - cy;
+        float d = (float) Math.sqrt(dx * dx + dy * dy);
+        if (d > r && d > 0f) {
+            dx = dx / d * r;
+            dy = dy / d * r;
+        }
+        joystickX = cx + dx;
+        joystickY = cy + dy;
+
+        Set<Integer> movement = ControlMath.movementKeys(dx, dy, r);
+        if (!movement.equals(lastMovement)) {
+            lastMovement = movement;
+            controller.setMovementKeys(movement);
+        }
+    }
+
+    private String hitButton(float x, float y, int w, int h, float s) {
+        if (inside(x, y, w * 0.12f, h * 0.47f, s * 0.065f)) return "sprint";
+        if (inside(x, y, w * 0.30f, h * 0.80f, s * 0.065f)) return "sneak";
+        if (inside(x, y, w * 0.89f, h * 0.57f, s * 0.082f)) return "attack";
+        if (inside(x, y, w * 0.76f, h * 0.70f, s * 0.074f)) return "use";
+        if (inside(x, y, w * 0.90f, h * 0.80f, s * 0.080f)) return "jump";
+        if (inside(x, y, w * 0.68f, h * 0.54f, s * 0.052f)) return "wheel_up";
+        if (inside(x, y, w * 0.68f, h * 0.65f, s * 0.052f)) return "wheel_down";
+        if (inside(x, y, w * 0.67f, h * 0.10f, s * 0.052f)) return "f3";
+        if (inside(x, y, w * 0.76f, h * 0.10f, s * 0.052f)) return "q";
+        if (inside(x, y, w * 0.85f, h * 0.10f, s * 0.052f)) return "inventory";
+        if (inside(x, y, w * 0.94f, h * 0.10f, s * 0.052f)) return "esc";
+        return null;
+    }
+
+    private int hitHotbar(float x, float y, int w, int h) {
+        float left = w * 0.34f;
+        float right = w * 0.66f;
+        float top = h * 0.885f;
+        float bottom = h * 0.985f;
+        if (x < left || x > right || y < top || y > bottom) return 0;
+        int slot = (int) ((x - left) / ((right - left) / 9f)) + 1;
+        return Math.max(1, Math.min(9, slot));
+    }
+
+    private void pressZone(String zone) {
+        switch (zone) {
+            case "sprint": controller.setModifier(HidCodes.MOD_LEFT_CTRL, true); break;
+            case "sneak": controller.setModifier(HidCodes.MOD_LEFT_SHIFT, true); break;
+            case "attack": controller.setMouseButton(HidCodes.MOUSE_LEFT, true); break;
+            case "use": controller.setMouseButton(HidCodes.MOUSE_RIGHT, true); break;
+            case "jump": controller.setKey(HidCodes.KEY_SPACE, true); break;
+            case "inventory": controller.setKey(HidCodes.KEY_E, true); break;
+            case "q": controller.setKey(HidCodes.KEY_Q, true); break;
+            case "esc": controller.setKey(HidCodes.KEY_ESC, true); break;
+            case "f3": controller.setKey(HidCodes.KEY_F3, true); break;
+            case "wheel_up": controller.scroll(1); break;
+            case "wheel_down": controller.scroll(-1); break;
+            default:
+                if (zone.startsWith("slot")) {
+                    int slot = Integer.parseInt(zone.substring(4));
+                    controller.setKey(slotKey(slot), true);
+                }
+                break;
+        }
+    }
+
+    private void releaseZone(String zone) {
+        switch (zone) {
+            case "sprint": controller.setModifier(HidCodes.MOD_LEFT_CTRL, false); break;
+            case "sneak": controller.setModifier(HidCodes.MOD_LEFT_SHIFT, false); break;
+            case "attack": controller.setMouseButton(HidCodes.MOUSE_LEFT, false); break;
+            case "use": controller.setMouseButton(HidCodes.MOUSE_RIGHT, false); break;
+            case "jump": controller.setKey(HidCodes.KEY_SPACE, false); break;
+            case "inventory": controller.setKey(HidCodes.KEY_E, false); break;
+            case "q": controller.setKey(HidCodes.KEY_Q, false); break;
+            case "esc": controller.setKey(HidCodes.KEY_ESC, false); break;
+            case "f3": controller.setKey(HidCodes.KEY_F3, false); break;
+            case "wheel_up":
+            case "wheel_down":
+                break;
+            default:
+                if (zone.startsWith("slot")) {
+                    int slot = Integer.parseInt(zone.substring(4));
+                    controller.setKey(slotKey(slot), false);
+                }
+                break;
+        }
+    }
+
+    private int slotKey(int slot) {
+        return HidCodes.KEY_1 + Math.max(0, Math.min(8, slot - 1));
+    }
+
+    private boolean isZoneHeld(String zone) {
+        return pointerZones.containsValue(zone);
+    }
+
+    private boolean inside(float x, float y, float cx, float cy, float r) {
+        return distance(x, y, cx, cy) <= r;
+    }
+
+    private float distance(float x, float y, float cx, float cy) {
+        float dx = x - cx;
+        float dy = y - cy;
+        return (float) Math.sqrt(dx * dx + dy * dy);
+    }
+}
