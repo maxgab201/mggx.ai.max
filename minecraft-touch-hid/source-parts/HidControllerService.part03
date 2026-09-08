@@ -1,0 +1,8 @@
+        public static final int KEY_SPACE = 0x2C;
+        public static final int KEY_F3 = 0x3C;
+        public static final byte MOD_LEFT_CTRL = 0x01;
+        public static final byte MOD_LEFT_SHIFT = 0x02;
+        public static final byte MOUSE_LEFT = 0x01;
+        public static final byte MOUSE_RIGHT = 0x02;
+    }
+}
