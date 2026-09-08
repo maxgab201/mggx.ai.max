@@ -1,0 +1,180 @@
+
+    @Override public void onDestroy() {
+        hideOverlay();
+        releaseAll();
+        try {
+            if (hid != null && appRegistered && hasBluetoothPermission()) hid.unregisterApp();
+        } catch (SecurityException ignored) {}
+        try {
+            if (adapter != null && hid != null) adapter.closeProfileProxy(BluetoothProfile.HID_DEVICE, hid);
+        } catch (Exception ignored) {}
+        super.onDestroy();
+    }
+
+    @Override public IBinder onBind(Intent intent) { return null; }
+
+    private boolean hasBluetoothPermission() {
+        return Build.VERSION.SDK_INT < 31 ||
+                checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private void initBluetoothProfile() {
+        if (adapter == null) {
+            broadcastStatus("Bluetooth no está disponible en este dispositivo.");
+            return;
+        }
+        if (!hasBluetoothPermission()) {
+            broadcastStatus("Concedé el permiso Bluetooth y volvé a la app.");
+            return;
+        }
+        if (hid != null) return;
+        try {
+            boolean requested = adapter.getProfileProxy(this, profileListener, BluetoothProfile.HID_DEVICE);
+            if (!requested) broadcastStatus("Android no pudo abrir el perfil HID Device.");
+        } catch (SecurityException e) {
+            broadcastStatus("Android bloqueó el perfil HID por permisos Bluetooth.");
+        }
+    }
+
+    private void registerHidApp() {
+        if (hid == null || !hasBluetoothPermission()) return;
+        BluetoothHidDeviceAppSdpSettings sdp = new BluetoothHidDeviceAppSdpSettings(
+                "MGGX Minecraft Touch",
+                "Keyboard + mouse controller for Minecraft",
+                "MGGX Games",
+                BluetoothHidDevice.SUBCLASS1_COMBO,
+                REPORT_DESCRIPTOR);
+        Executor executor = getMainExecutor();
+        try {
+            boolean accepted = hid.registerApp(sdp, null, null, executor, hidCallback);
+            if (!accepted) broadcastStatus("El sistema rechazó el registro HID. Cerrá otras apps HID y reintentá.");
+        } catch (SecurityException e) {
+            broadcastStatus("Falta permiso BLUETOOTH_CONNECT para registrar HID.");
+        }
+    }
+
+    private void maybeAutoConnect() {
+        SharedPreferences prefs = getSharedPreferences("controls", MODE_PRIVATE);
+        String last = prefs.getString("last_device", null);
+        if (last != null) {
+            pendingAddress = last;
+            connectToAddress(last);
+        }
+    }
+
+    private void connectToAddress(String address) {
+        if (adapter == null || !hasBluetoothPermission()) {
+            broadcastStatus("Falta permiso Bluetooth para conectar.");
+            return;
+        }
+        if (hid == null || !appRegistered) {
+            pendingAddress = address;
+            broadcastStatus("Esperando a que el perfil HID quede listo…");
+            return;
+        }
+        try {
+            BluetoothDevice device = adapter.getRemoteDevice(address);
+            boolean started = hid.connect(device);
+            broadcastStatus(started
+                    ? "Solicitando conexión HID a " + safeDeviceName(device) + "…"
+                    : "Android rechazó la conexión HID. Verificá que el PC esté emparejado.");
+        } catch (IllegalArgumentException e) {
+            broadcastStatus("Dirección Bluetooth inválida.");
+        } catch (SecurityException e) {
+            broadcastStatus("Android bloqueó la conexión HID por permisos.");
+        }
+    }
+
+    private String safeDeviceName(BluetoothDevice device) {
+        try {
+            String name = device.getName();
+            return name == null || name.trim().isEmpty() ? device.getAddress() : name;
+        } catch (SecurityException e) {
+            return "PC";
+        }
+    }
+
+    private Notification buildNotification(String text) {
+        NotificationManager nm = getSystemService(NotificationManager.class);
+        if (Build.VERSION.SDK_INT >= 26) {
+            NotificationChannel channel = new NotificationChannel(
+                    CHANNEL_ID, "Minecraft Touch HID", NotificationManager.IMPORTANCE_LOW);
+            channel.setDescription("Mantiene activo el teclado/mouse Bluetooth y los controles flotantes.");
+            nm.createNotificationChannel(channel);
+        }
+        Intent open = new Intent(this, MainActivity.class);
+        PendingIntent contentIntent = PendingIntent.getActivity(
+                this, 0, open,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        return new Notification.Builder(this, CHANNEL_ID)
+                .setSmallIcon(android.R.drawable.ic_menu_compass)
+                .setContentTitle("MGGX Minecraft Touch")
+                .setContentText(text)
+                .setOngoing(true)
+                .setContentIntent(contentIntent)
+                .build();
+    }
+
+    private void updateNotification(String text) {
+        NotificationManager nm = getSystemService(NotificationManager.class);
+        nm.notify(NOTIFICATION_ID, buildNotification(text));
+    }
+
+    private void broadcastStatus(String status) {
+        Intent i = new Intent(ACTION_STATUS).setPackage(getPackageName());
+        i.putExtra(EXTRA_STATUS, status);
+        sendBroadcast(i);
+        updateNotification(status);
+    }
+
+    private void showOverlay() {
+        if (!Settings.canDrawOverlays(this)) {
+            broadcastStatus("Falta el permiso de overlay.");
+            return;
+        }
+        showModeToggle();
+        enableControls();
+    }
+
+    private void showModeToggle() {
+        if (modeToggleView != null) return;
+
+        modeToggleView = new Button(this);
+        modeToggleView.setAllCaps(false);
+        modeToggleView.setTextSize(12f);
+        modeToggleView.setPadding(dp(10), 0, dp(10), 0);
+        modeToggleView.setOnClickListener(v -> toggleControlMode());
+        updateModeToggleText();
+
+        WindowManager.LayoutParams params = new WindowManager.LayoutParams(
+                dp(126), dp(48),
+                Build.VERSION.SDK_INT >= 26
+                        ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                        : WindowManager.LayoutParams.TYPE_PHONE,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                        | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                PixelFormat.TRANSLUCENT);
+        params.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
+        params.y = dp(10);
+
+        try {
+            windowManager.addView(modeToggleView, params);
+        } catch (Exception e) {
+            modeToggleView = null;
+            broadcastStatus("No se pudo mostrar el botón de modo: " + e.getClass().getSimpleName());
+        }
+    }
+
+    private void toggleControlMode() {
+        if (controlsEnabled) disableControlsForTouch();
+        else enableControls();
+    }
+
+    public void disableControlsForTouch() {
+        releaseAll();
+        if (overlayView != null) {
+            try { windowManager.removeView(overlayView); } catch (Exception ignored) {}
+            overlayView = null;
+        }
+        controlsEnabled = false;
+        updateModeToggleText();
