@@ -25,6 +25,15 @@ jobs:
           gradle-version: '8.13'
       - name: Install Android SDK 36
         run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+      - name: Assemble split source files
+        run: |
+          set -euo pipefail
+          OUT=minecraft-touch-hid/minecrafttouchhid/src/main/java/com/mggx/minecrafttouchhid
+          mkdir -p "$OUT"
+          cat minecraft-touch-hid/source-parts/HidControllerService.part* > "$OUT/HidControllerService.java"
+          cat minecraft-touch-hid/source-parts/MinecraftOverlayView.part* > "$OUT/MinecraftOverlayView.java"
+          echo 'e19302a78a3866f7d1c654c3bde7c6282745e66e3f452feb5b1c208ed9dda787  minecraft-touch-hid/minecrafttouchhid/src/main/java/com/mggx/minecrafttouchhid/HidControllerService.java' | sha256sum -c -
+          echo 'bb118532fd58bcfaf02af2ebcabc9faa70abb6c364f2d4f11bb9c32b9ad2d2a5  minecraft-touch-hid/minecrafttouchhid/src/main/java/com/mggx/minecrafttouchhid/MinecraftOverlayView.java' | sha256sum -c -
       - name: Unit tests
         working-directory: minecraft-touch-hid
         run: gradle :minecrafttouchhid:testDebugUnitTest --stacktrace
@@ -36,6 +45,7 @@ jobs:
         run: gradle :minecrafttouchhid:assembleDebug --stacktrace
       - name: Verify and package
         run: |
+          set -euo pipefail
           APK=minecraft-touch-hid/minecrafttouchhid/build/outputs/apk/debug/minecrafttouchhid-debug.apk
           test -f "$APK"
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner -print -quit)
